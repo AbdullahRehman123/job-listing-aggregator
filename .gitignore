@@ -2,4 +2,5 @@
 env/
 
 #data folder
-data/
+data/*
+!data/.gitkeep
