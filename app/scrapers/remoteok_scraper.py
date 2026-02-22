@@ -1,42 +1,53 @@
-from scrapers.base_scraper import BaseScraper
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 from models.job import Job
 from datetime import datetime
 from typing import List
-import re
+import time
 
-class RemoteOKScraper(BaseScraper):
-    """Scraper for RemoteOK.com"""
+class RemoteOKScraper:
+    """Scraper for RemoteOK.com using Selenium"""
     
     def __init__(self):
-        super().__init__()
         self.base_url = "https://remoteok.com/remote-python-jobs"
         self.source = "RemoteOK"
+        self.driver = None
+    
+    def setup_driver(self):
+        """Setup Selenium WebDriver"""
+        options = Options()
+        options.add_argument('--headless')  # Run in background
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        
+        service = Service(ChromeDriverManager().install())
+        self.driver = webdriver.Chrome(service=service, options=options)
     
     def scrape(self) -> List[Job]:
         """Scrape Python jobs from RemoteOK"""
         jobs = []
         
         try:
-            soup = self.fetch_page(self.base_url)
+            self.setup_driver()
+            self.driver.get(self.base_url)
             
-            # Debug: Save HTML to see structure
-            with open('debug.html', 'w', encoding='utf-8') as f:
-                f.write(soup.prettify())
-            print("HTML saved to debug.html - check the structure")
+            # Wait for jobs to load
+            time.sleep(5)
             
-            # Try different selectors
-            job_listings = soup.find_all('tr', class_='job')
+            # Find job elements (they have class 'job' but not 'placeholder')
+            job_elements = self.driver.find_elements(By.CSS_SELECTOR, 'tr.job:not(.placeholder)')
             
-            if not job_listings:
-                # Try alternative selector
-                job_listings = soup.find_all('td', class_='company')
-                print(f"Found {len(job_listings)} listings with alternative selector")
+            print(f"Found {len(job_elements)} job listings")
             
-            print(f"Found {len(job_listings)} job listings")
-            
-            for idx, listing in enumerate(job_listings[:20]):
+            for idx, element in enumerate(job_elements[:20]):
                 try:
-                    job = self._parse_job(listing)
+                    job = self._parse_job(element)
                     if job:
                         jobs.append(job)
                         print(f"{idx+1}. {job.title} at {job.company}")
@@ -46,52 +57,56 @@ class RemoteOKScraper(BaseScraper):
             
         except Exception as e:
             print(f"Error scraping {self.source}: {e}")
+        finally:
+            if self.driver:
+                self.driver.quit()
         
         return jobs
     
-    def _parse_job(self, listing) -> Job:
+    def _parse_job(self, element) -> Job:
         """Parse individual job listing"""
         
-        # Get all text from the listing for debugging
-        all_text = listing.get_text(strip=True)
-        
-        # Title - try multiple approaches
-        title = None
-        title_elem = listing.find('h2')
-        if not title_elem:
-            title_elem = listing.find('a', class_='preventLink')
-        if not title_elem:
-            title_elem = listing.find(class_='title')
-        
-        title = title_elem.text.strip() if title_elem else all_text[:50]
+        # Title
+        try:
+            title = element.find_element(By.CSS_SELECTOR, 'h2[itemprop="title"]').text.strip()
+        except:
+            title = "N/A"
         
         # Company
-        company = None
-        company_elem = listing.find('h3')
-        if not company_elem:
-            company_elem = listing.find(class_='company')
-        
-        company = company_elem.text.strip() if company_elem else "Unknown"
+        try:
+            company = element.find_element(By.CSS_SELECTOR, 'h3[itemprop="name"]').text.strip()
+        except:
+            company = "Unknown"
         
         # URL
-        link_elem = listing.find('a', href=True)
-        url = f"https://remoteok.com{link_elem['href']}" if link_elem else ""
+        try:
+            url = element.get_attribute('data-url')
+            if url:
+                url = f"https://remoteok.com{url}"
+        except:
+            url = ""
         
-        # Technologies
-        tags = listing.find_all('a', class_='tag')
-        if not tags:
-            tags = listing.find_all(class_='tag')
-        technologies = [tag.text.strip() for tag in tags if tag.text.strip()]
+        # Technologies (tags)
+        technologies = []
+        try:
+            tag_elements = element.find_elements(By.CSS_SELECTOR, 'a.tag')
+            technologies = [tag.text.strip() for tag in tag_elements if tag.text.strip()]
+        except:
+            pass
         
-        # Location
-        location = "Remote"
+        # Salary
+        salary = None
+        try:
+            salary = element.find_element(By.CSS_SELECTOR, 'div.salary').text.strip()
+        except:
+            pass
         
         return Job(
             title=title,
             company=company,
-            location=location,
+            location="Remote",
             job_type="Remote",
-            salary=None,
+            salary=salary,
             description=title,
             url=url,
             technologies=technologies,
